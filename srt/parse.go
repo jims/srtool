@@ -15,7 +15,7 @@ type Rect struct {
 
 // Strip represents a single strip of subtitle
 type Strip struct {
-	Sequende uint
+	Sequence int
 	Start    time.Time
 	Duration time.Duration
 	Lines    []string
@@ -36,7 +36,7 @@ type state struct {
 }
 
 type token struct {
-	typ int
+	typ tokenType
 	val interface{}
 	pos int
 }
@@ -47,16 +47,37 @@ const (
 	tokenRightArrow
 	tokenColon
 	tokenLine
+	tokenSeparator
 	tokenEnd
 )
+
+type tokenType int
+
+func (t tokenType) String() string {
+	switch t {
+	case tokenInteger:
+		return "Integer"
+	case tokenTime:
+		return "Time"
+	case tokenRightArrow:
+		return "Right arrow"
+	case tokenColon:
+		return "Colon"
+	case tokenLine:
+		return "Line"
+	}
+	panic(fmt.Errorf("Unknown token type %d", t))
+}
 
 type lexer func(l *state) lexer
 
 func (s *state) advance() {
-	if s.scanner.Scan() {
-		s.buffer = s.scanner.Bytes()
-	} else {
-		s.buffer = nil
+	for len(s.buffer) == 0 {
+		if s.scanner.Scan() {
+			s.buffer = s.scanner.Bytes()
+		} else {
+			return
+		}
 	}
 }
 
@@ -77,7 +98,7 @@ func (s *state) input() string {
 	return string(s.buffer)
 }
 
-func (s *state) emit(tok int, val interface{}) {
+func (s *state) emit(tok tokenType, val interface{}) {
 	s.tokens <- token{tok, val, s.position}
 }
 
@@ -88,10 +109,13 @@ func lexTime(l *state) lexer {
 func lexInteger(l *state) lexer {
 	i, err := strconv.ParseInt(l.input(), 10, 64)
 	if err != nil {
+		l.emit(tokenEnd, nil)
 		return nil
 	}
 
 	l.emit(tokenInteger, i)
+	l.consume(len(l.buffer))
+
 	return lexTime
 }
 
@@ -100,6 +124,7 @@ func lex(tokens chan token, input io.Reader) {
 	scanner.Split(bufio.ScanLines)
 
 	state := &state{tokens, scanner, nil, 0}
+	state.advance()
 
 	for l := lexInteger; l != nil; {
 		l = l(state)
@@ -107,8 +132,39 @@ func lex(tokens chan token, input io.Reader) {
 	close(tokens)
 }
 
+func consume(t tokenType, tokens <-chan token) (*token, error) {
+	next := <-tokens
+	if next.typ == t {
+		return &next, nil
+	}
+	return nil, fmt.Errorf("Unexpected token '%s' at position %d", next.typ, next.pos)
+
+}
+
 func parseStrip(tokens <-chan token) (*Strip, error) {
-	return nil, fmt.Errorf("Invalid subtitle")
+	strip := &Strip{}
+	t, err := consume(tokenInteger, tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	t, err = consume(tokenTime, tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	t, err = consume(tokenRightArrow, tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	t, err = consume(tokenTime, tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	strip.Sequence = int(t.val.(int64))
+	return strip, nil
 }
 
 func emit(results chan<- Result, val interface{}) {

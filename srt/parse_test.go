@@ -30,6 +30,6 @@ func TestParse(t *testing.T) {
 	}
 
 	for _, s := range strips {
-		fmt.Print(s)
+		fmt.Print("strip: ", s)
 	}
 }
